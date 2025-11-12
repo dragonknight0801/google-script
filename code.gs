@@ -21,6 +21,7 @@ const walletAddress = ""; // Deprecated now
 
 // Sheet configuration
 const SHEET_NAME = "Sheet1";
+const DASHBOARD_SHEET_NAME = "Dashboard";
 const SHEET_HEADER_ROW = 4;
 const START_ROW_IN_TEMPLATE = 5;
 
@@ -648,29 +649,40 @@ function clearSheet() {
 }
 
 function createPieChart(length, pos) {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const mainSheet = spreadsheet.getSheetByName(SHEET_NAME);
+  
+  // Get or create dashboard sheet
+  let dashboardSheet = spreadsheet.getSheetByName(DASHBOARD_SHEET_NAME);
+  if (!dashboardSheet) {
+    dashboardSheet = spreadsheet.insertSheet(DASHBOARD_SHEET_NAME);
+  } else {
+    // Clear dashboard sheet content
+    dashboardSheet.clear();
+  }
 
-  // Remove old charts
-  const charts = sheet.getCharts();
-  charts.forEach(chart => sheet.removeChart(chart));
+  // Remove old charts from dashboard sheet
+  const charts = dashboardSheet.getCharts();
+  charts.forEach(chart => dashboardSheet.removeChart(chart));
 
-  const assetRange = sheet.getRange(`Q5:Q${5 + length - 1}`);  // Asset names
-  const valueRange = sheet.getRange(`R5:R${5 + length - 1}`);  // Total values
+  // Get data ranges from main sheet
+  const assetRange = mainSheet.getRange(`Q5:Q${5 + length - 1}`);  // Asset names
+  const valueRange = mainSheet.getRange(`R5:R${5 + length - 1}`);  // Total values
 
   // Build the chart
-  const chart = sheet.newChart()
+  const chart = dashboardSheet.newChart()
     .setChartType(Charts.ChartType.PIE)  // Circle chart
     .addRange(assetRange)
     .addRange(valueRange)
-    .setPosition(5 + pos + 10, 7, 0, 0)
+    .setPosition(2, 1, 0, 0)
     .setOption("title", "Portfolio Allocation")
     .setOption("pieHole", 0)
     .setOption("width", 300)
     .setOption("height", 240)
     .build();
 
-  // Insert chart into sheet
-  sheet.insertChart(chart);
+  // Insert chart into dashboard sheet
+  dashboardSheet.insertChart(chart);
 }
 
 function main() {
