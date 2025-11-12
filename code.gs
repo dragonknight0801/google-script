@@ -24,6 +24,7 @@ const SHEET_NAME = "Sheet1";
 const DASHBOARD_SHEET_NAME = "Dashboard";
 const SHEET_HEADER_ROW = 4;
 const START_ROW_IN_TEMPLATE = 5;
+const PORTFOLIO_CHART_FOLDER_NAME = 'PortfolioCharts';
 
 /**
  * @description Generate the signature required to call the SnapTrade API.
@@ -665,7 +666,24 @@ function createPieChart(length, pos) {
   const charts = dashboardSheet.getCharts();
   charts.forEach(chart => dashboardSheet.removeChart(chart));
 
-  // Get data ranges from main sheet
+  // Remove old images from main sheet header area (rows 1-4)
+  try {
+    const images = mainSheet.getImages();
+    images.forEach(img => {
+      try {
+        const anchorCell = img.getAnchorCell();
+        if (anchorCell && anchorCell.getRow() <= SHEET_HEADER_ROW) {
+          img.remove(); // delete each image
+        }
+      } catch (e) {
+        Logger.log("Error removing image: " + e.message);
+      }
+    });
+  } catch (e) {
+    Logger.log("Error getting images: " + e.message);
+  }
+
+  // Get data from main sheet
   const assetRange = mainSheet.getRange(`Q5:Q${5 + length - 1}`);  // Asset names
   const valueRange = mainSheet.getRange(`R5:R${5 + length - 1}`);  // Total values
 
@@ -683,6 +701,63 @@ function createPieChart(length, pos) {
 
   // Insert chart into dashboard sheet
   dashboardSheet.insertChart(chart);
+
+  // Get chart as image blob
+  const chartBlob = chart.getAs('image/png');
+  
+  // Chart dimensions (in pixels)
+  const chartHeightPixels = 240;
+  
+  // Convert pixels to points (1 pixel ≈ 0.75 points at 72 DPI)
+  // Add padding for better appearance (100 points total padding)
+  const chartHeightPoints = chartHeightPixels * 0.75;
+  const paddingPoints = 100;
+  const requiredHeightPoints = chartHeightPoints + paddingPoints;
+  
+  // Calculate current total height of frozen rows (rows 1 to 2)
+  let currentFrozenRowsHeight = 0;
+  for (let row = 1; row <= 2; row++) {
+    currentFrozenRowsHeight += mainSheet.getRowHeight(row);
+  }
+  
+  // Adjust row 1 height if chart is taller than frozen rows area
+  if (requiredHeightPoints > currentFrozenRowsHeight) {
+    const currentRow1Height = mainSheet.getRowHeight(1);
+    const additionalHeightNeeded = requiredHeightPoints - currentFrozenRowsHeight;
+    const newRow1Height = currentRow1Height + additionalHeightNeeded;
+    mainSheet.setRowHeight(1, newRow1Height);
+    Logger.log(`Row 1 height adjusted from ${currentRow1Height} to ${newRow1Height} points to accommodate chart`);
+  }
+  
+  // Save chart image to Google Drive
+  try {
+    // Try to get the special folder. If not exists, create it.
+    let folders = DriveApp.getFoldersByName(PORTFOLIO_CHART_FOLDER_NAME);
+    let driveFolder;
+    if (folders.hasNext()) {
+      driveFolder = folders.next();
+    } else {
+      driveFolder = DriveApp.createFolder(PORTFOLIO_CHART_FOLDER_NAME);
+    }
+
+    const fileName = `PortfolioChart_${Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd_HHmmss')}.png`;
+    const file = driveFolder.createFile(chartBlob).setName(fileName);
+    Logger.log(`Chart image saved to Drive: ${file.getName()} (ID: ${file.getId()})`);
+    
+    // Insert image into main sheet in frozen header area (row 1, column 1)
+    // Using the chart blob directly (same as file.getBlob())
+    mainSheet.insertImage(chartBlob, 1, 1);
+    Logger.log(`Chart image inserted into main sheet at row 1, column 1`);
+  } catch (error) {
+    Logger.log(`Error saving/inserting chart image: ${error.message}`);
+    // Fallback: try inserting blob directly without saving to Drive
+    try {
+      mainSheet.insertImage(chartBlob, 1, 1);
+      Logger.log(`Chart image inserted directly (without Drive save)`);
+    } catch (e) {
+      Logger.log(`Error inserting chart image: ${e.message}`);
+    }
+  }
 }
 
 function main() {
