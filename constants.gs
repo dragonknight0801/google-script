@@ -12,7 +12,8 @@ const GoldRushSupportedNetworks = {
   "arbitrum-nova-mainnet": "Arbitrum Nova",
   "axie-mainnet": "Axie/Ronin",
   "berachain-mainnet": "Berachain",
-  "hyperevm-mainnet": "HyperEVM"
+  "hyperevm-mainnet": "HyperEVM",
+  "solana-mainnet": "Solana"
 };
 
 const myBlueChipTokens = {
@@ -28,6 +29,6 @@ const myBlueChipTokens = {
   }
 };
 const stakedSOL = [
-  "PSOL",
-  "JitoSOL"
+  "psol",
+  "jitosol"
 ];

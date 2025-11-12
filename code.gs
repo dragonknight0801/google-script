@@ -5,16 +5,19 @@ const USER_ID = "snaptrader-user-bab";
 const USER_SECRET = "a55c2e5f-bab3-4ee1-956e-833303bc1c4c";
 const BASE_URL = "https://api.snaptrade.com";
 
-// Phantom Wallet configuration
-const walletAddress = "DkwGTBw3M2ZtbKCz7o8vLDHmSMk1Pd5Prxo2AMxoxH6m";
-
 // Covalent API configuration (credentials and base URL)
 const COVALENT_KEY = "cqt_rQTxFVcqdtDjfGQXcJh9Xq9YYV43";
 const COVALENT_BASE_URL = "https://api.covalenthq.com";
 
-// TrustWallet configuration
-const evmWalletAddress = "0x028652871E67848Ab21E5A9Fcf4CC7c2ef00fbab";
-const walletAddressOnChain = "btc-mainnet:bc1qjsgkhl2jey57ytkp8kvf5un9v8r552gargd37l";
+// Wallet configuration
+const walletAddressesOnChain = [
+  "solana-mainnet:DkwGTBw3M2ZtbKCz7o8vLDHmSMk1Pd5Prxo2AMxoxH6m",
+  "btc-mainnet:bc1qjsgkhl2jey57ytkp8kvf5un9v8r552gargd37l"
+];
+const evmWalletAddress = ""; // Use this when evm wallet is ready
+
+// Phantom Wallet configuration
+const walletAddress = ""; // Deprecated now
 
 // Sheet configuration
 const SHEET_NAME = "Sheet1";
@@ -292,7 +295,9 @@ function getSnapTradeFeedData() {
       feedData.push([
         Asset, DataPurchased, Platform, AccountNumber, Type, PositionType, Quantity, LastPrice, TotalValue, PricePaid, TotalCost, TotalGain, TotalGainPercent, Notes
       ]);
-      summarizedData[Asset] = summarizedData[Asset] == null ? totalValue : summarizedData[Asset] + totalValue;
+      if (totalValue) {
+        summarizedData[Asset] = summarizedData[Asset] == null ? totalValue : summarizedData[Asset] + totalValue;
+      }
     });
 
     options.forEach(({ symbol: { option_symbol: { ticker, underlying_symbol: { symbol: underlyingSymbol } } }, price, units, average_purchase_price }) => {
@@ -317,7 +322,9 @@ function getSnapTradeFeedData() {
       feedData.push([
         Asset, DataPurchased, Platform, AccountNumber, Type, PositionType, Quantity, LastPrice, TotalValue, PricePaid, TotalCost, TotalGain, TotalGainPercent, Notes
       ]);
-      summarizedData[underlyingSymbol] = summarizedData[underlyingSymbol] == null ? totalValue : summarizedData[underlyingSymbol] + totalValue;
+      if (totalValue) {
+        summarizedData[underlyingSymbol] = summarizedData[underlyingSymbol] == null ? totalValue : summarizedData[underlyingSymbol] + totalValue;
+      }
     });
   });
 
@@ -389,14 +396,14 @@ function getMultichainBalances() {
 /**
  * @description Get token balances using covalent api.
  */
-function getWalletBalancesOnChain() {
+function getWalletBalancesOnChain(walletAddress) {
   const feedData = [];
 
-  const parts = walletAddressOnChain.split(":", 2);
+  const parts = walletAddress.split(":", 2);
   const chainIdentifier = parts[0];
   const address = parts[1];
   if (!Object.keys(GoldRushSupportedNetworks).includes(chainIdentifier) || !address) {
-    Logger.log("❌ Invalid wallet address format: " + walletAddressOnChain);
+    Logger.log("❌ Invalid wallet address format: " + walletAddress);
 
     return [[], []]
   }
@@ -407,7 +414,7 @@ function getWalletBalancesOnChain() {
   try {
     const response = UrlFetchApp.fetch(url);
     items = JSON.parse(response.getContentText()).data.items || [];
-    Logger.log(`Wallet-${walletAddressOnChain}-balances`);
+    Logger.log(`Wallet-${walletAddress}-balances`);
     Logger.log(JSON.stringify(items));
   } catch (error) {
     Logger.log("❌ Covalent API call failed: " + error.message);
@@ -418,13 +425,13 @@ function getWalletBalancesOnChain() {
   const summarizedData = {};
 
   // 4. Get position status
-  items.forEach(({ contract_ticker_symbol, contract_decimals, balance, quote, quote_rate }) => {
+  items.forEach(({ contract_ticker_symbol, contract_address, contract_decimals, balance, quote, quote_rate }) => {
     if (!quote) return;
-    const Asset = contract_ticker_symbol;
+    const Asset = contract_ticker_symbol ?? myBlueChipTokens[contract_address]?.symbol;
     const DataPurchased = "";
     const Platform = GoldRushSupportedNetworks[chainIdentifier];
     const AccountNumber = address;
-    const Type = "Spot";
+    const Type = stakedSOL.includes(Asset ? Asset.toLowerCase() : "") ? "Staked" : "Spot";
     const PositionType = "";
     const Quantity = formatTokenBalance(balance, contract_decimals);
     const LastPrice = quote_rate;
@@ -438,164 +445,188 @@ function getWalletBalancesOnChain() {
     feedData.push([
       Asset, DataPurchased, Platform, AccountNumber, Type, PositionType, Quantity, LastPrice, TotalValue, PricePaid, TotalCost, TotalGain, TotalGainPercent, Notes
     ]);
-    summarizedData[Asset] = summarizedData[Asset] == null ? quote : summarizedData[Asset] + quote;
+    let symbol1 = Asset;
+    if (Type == "Staked") {
+      symbol1 = "SOL";
+    }
+    summarizedData[symbol1] = summarizedData[symbol1] == null ? quote : summarizedData[symbol1] + quote;
   });
 
   return [feedData, summarizedData];
+}
+
+function getMultiWalletBalancesOnChain(walletAddresses) {
+  let overallFeedData = [];
+  const overallSummarizedData = {};
+  for (let i = 0; i < walletAddresses.length; i++) {
+    const [feedData, summarizedData] = getWalletBalancesOnChain(walletAddresses[i]);
+    overallFeedData = [...overallFeedData, ...feedData];
+    Object.keys(summarizedData).forEach((asset) => {
+      overallSummarizedData[asset] = overallSummarizedData[asset] ? overallSummarizedData[asset] + summarizedData[asset] : summarizedData[asset];
+    });
+  }
+
+  return [overallFeedData, overallSummarizedData];
 }
 
 /**
  * @description Fetch solana token balances.
  */
 function getSolanaTokenBalances() {
-  // 1. Get balance of SOL and tokens in wallet
-  const solBalanceResponse = UrlFetchApp.fetch("https://api.mainnet-beta.solana.com", {
-    method: "post",
-    contentType: "application/json",
-    payload: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "getBalance",
-      params: [
-        walletAddress
-      ]
-    })
-  });
-  const tokenAccountsResponse = UrlFetchApp.fetch("https://api.mainnet-beta.solana.com", {
-    method: "post",
-    contentType: "application/json",
-    payload: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "getTokenAccountsByOwner",
-      params: [
-        walletAddress,
-        { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
-        { commitment: "finalized", encoding: "jsonParsed" }
-      ]
-    })
-  });
+  try {
+    // 1. Get balance of SOL and tokens in wallet
+    const solBalanceResponse = UrlFetchApp.fetch("https://api.mainnet-beta.solana.com", {
+      method: "post",
+      contentType: "application/json",
+      payload: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "getBalance",
+        params: [
+          walletAddress
+        ]
+      })
+    });
+    const tokenAccountsResponse = UrlFetchApp.fetch("https://api.mainnet-beta.solana.com", {
+      method: "post",
+      contentType: "application/json",
+      payload: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "getTokenAccountsByOwner",
+        params: [
+          walletAddress,
+          { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+          { commitment: "finalized", encoding: "jsonParsed" }
+        ]
+      })
+    });
 
-  const solBalance = JSON.parse(solBalanceResponse.getContentText()).result?.value / 1000000000;
-  const tokenAccountsData = JSON.parse(tokenAccountsResponse.getContentText()).result?.value || [];
+    const solBalance = JSON.parse(solBalanceResponse.getContentText()).result?.value / 1000000000;
+    const tokenAccountsData = JSON.parse(tokenAccountsResponse.getContentText()).result?.value || [];
 
-  // 2. Get all Phantom tokens info (for symbol, decimals)
-  const phantomTokens = [];
-  let lastAddress = "";
-  for (let i = 0; i < 2; i++) {
-    const tokenFetchUrl = "https://api.phantom.app/search/v1?query=&chainIds=solana%3A101&pageSize=100&searchTypes=fungible&searchContext=explore";
-    const phantomTokensResponse = UrlFetchApp.fetch(
-      !lastAddress ?
-        tokenFetchUrl :
-        `${tokenFetchUrl}&cursor=direction%3Ddown%2ClastTradingVolume%3D64708791%2ClastChainId%3Dsolana%3A101%2ClastAddress%3D${lastAddress}`
-    );
-    const result = JSON.parse(phantomTokensResponse.getContentText()).results || [];
-    phantomTokens.push(...result);
-    if (result.length) {
-      lastAddress = result[result.length - 1].data?.data?.mintAddress;
+    // 2. Get all Phantom tokens info (for symbol, decimals)
+    const phantomTokens = [];
+    let lastAddress = "";
+    for (let i = 0; i < 2; i++) {
+      const tokenFetchUrl = "https://api.phantom.app/search/v1?query=&chainIds=solana%3A101&pageSize=100&searchTypes=fungible&searchContext=explore";
+      const phantomTokensResponse = UrlFetchApp.fetch(
+        !lastAddress ?
+          tokenFetchUrl :
+          `${tokenFetchUrl}&cursor=direction%3Ddown%2ClastTradingVolume%3D64708791%2ClastChainId%3Dsolana%3A101%2ClastAddress%3D${lastAddress}`
+      );
+      const result = JSON.parse(phantomTokensResponse.getContentText()).results || [];
+      phantomTokens.push(...result);
+      if (result.length) {
+        lastAddress = result[result.length - 1].data?.data?.mintAddress;
+      }
     }
+
+    // Map mint address to token info
+    const mintMap = {};
+    phantomTokens.forEach(t => {
+      if (t.data?.data?.mintAddress) {
+        mintMap[t.data.data.mintAddress] = {
+          symbol: t.data.data.symbol,
+          decimals: t.data.data.decimals
+        };
+      }
+    });
+
+    // 3. Prepare tokens array for price API
+    const tokensForPrice = [];
+    const tokenBalances = [{
+      balance: solBalance,
+      symbol: "SOL"
+    }];
+
+    tokenAccountsData.forEach(account => {
+      const info = account.account.data.parsed.info;
+      const balance = parseFloat(info.tokenAmount.uiAmount);
+      const decimals = parseFloat(info.tokenAmount.decimals);
+      const mint = info.mint;
+      if (balance > 0 && decimals > 0 && (mintMap[mint] || myBlueChipTokens[mint])) {
+        const tokenInfo = mintMap[mint] || myBlueChipTokens[mint];
+        tokenBalances.push({
+          mint: mint,
+          balance: balance,
+          symbol: tokenInfo.symbol
+        });
+        tokensForPrice.push({
+          token: {
+            chainId: "solana:101",
+            address: mint,
+            resourceType: "address"
+          }
+        });
+      }
+    });
+
+    // Include native SOL
+    tokensForPrice.push({
+      token: {
+        chainId: "solana:101",
+        resourceType: "nativeToken",
+        slip44: "501"
+      }
+    });
+
+    // 4. Get prices
+    const pricesResponse = UrlFetchApp.fetch("https://api.phantom.app/price/v1", {
+      method: "post",
+      contentType: "application/json",
+      payload: JSON.stringify({ tokens: tokensForPrice })
+    });
+
+    const pricesData = JSON.parse(pricesResponse.getContentText()).prices || [];
+
+    // Map mint to price
+    const priceMap = {};
+    Object.keys(pricesData).forEach(key => {
+      const address = key.split(":")[2]; 
+      if (address === "501") priceMap["SOL"] = pricesData[key].price;
+      else priceMap[address] = pricesData[key].price;
+    });
+
+    const results = [];
+    const summarizedData = {};
+    tokenBalances.forEach(t => {
+      const price = t.symbol === "SOL" ? priceMap["SOL"] : priceMap[t.mint] || 0;
+      const value = t.balance * price;
+
+      const Asset = t.symbol;
+      const DataPurchased = "";
+      const Platform = "Phantom";
+      const AccountNumber = walletAddress;
+      const Type = stakedSOL.includes(Asset ? Asset.toLowerCase() : "") ? "Staked" : "Spot";
+      const PositionType = "";
+      const Quantity = t.balance.toString();
+      const LastPrice = price;
+      const TotalValue = value.toString();
+      const PricePaid = "";
+      const TotalCost = "";
+      // const open_pnl = "";
+      const TotalGain = "";
+      const TotalGainPercent = "";
+      const Notes = "";
+
+      results.push([
+        Asset, DataPurchased, Platform, AccountNumber, Type, PositionType, Quantity, LastPrice, TotalValue, PricePaid, TotalCost, TotalGain, TotalGainPercent, Notes
+      ]);
+
+      let symbol1 = Asset;
+      if (Type == "Staked") {
+        symbol1 = "SOL";
+      }
+      summarizedData[symbol1] = summarizedData[symbol1] == null ? value : summarizedData[symbol1] + value;
+    });
+
+    return [results, summarizedData];
+  } catch (error) {
+    Logger.log("❌ Phantom API call failed: " + error.message);
   }
 
-  // Map mint address to token info
-  const mintMap = {};
-  phantomTokens.forEach(t => {
-    if (t.data?.data?.mintAddress) {
-      mintMap[t.data.data.mintAddress] = {
-        symbol: t.data.data.symbol,
-        decimals: t.data.data.decimals
-      };
-    }
-  });
-
-  // 3. Prepare tokens array for price API
-  const tokensForPrice = [];
-  const tokenBalances = [{
-    balance: solBalance,
-    symbol: "SOL"
-  }];
-
-  tokenAccountsData.forEach(account => {
-    const info = account.account.data.parsed.info;
-    const balance = parseFloat(info.tokenAmount.uiAmount);
-    const decimals = parseFloat(info.tokenAmount.decimals);
-    const mint = info.mint;
-    if (balance > 0 && decimals > 0 && (mintMap[mint] || myBlueChipTokens[mint])) {
-      const tokenInfo = mintMap[mint] || myBlueChipTokens[mint];
-      tokenBalances.push({
-        mint: mint,
-        balance: balance,
-        symbol: tokenInfo.symbol
-      });
-      tokensForPrice.push({
-        token: {
-          chainId: "solana:101",
-          address: mint,
-          resourceType: "address"
-        }
-      });
-    }
-  });
-
-  // Include native SOL
-  tokensForPrice.push({
-    token: {
-      chainId: "solana:101",
-      resourceType: "nativeToken",
-      slip44: "501"
-    }
-  });
-
-  // 4. Get prices
-  const pricesResponse = UrlFetchApp.fetch("https://api.phantom.app/price/v1", {
-    method: "post",
-    contentType: "application/json",
-    payload: JSON.stringify({ tokens: tokensForPrice })
-  });
-
-  const pricesData = JSON.parse(pricesResponse.getContentText()).prices || [];
-
-  // Map mint to price
-  const priceMap = {};
-  Object.keys(pricesData).forEach(key => {
-    const address = key.split(":")[2]; 
-    if (address === "501") priceMap["SOL"] = pricesData[key].price;
-    else priceMap[address] = pricesData[key].price;
-  });
-
-  const results = [];
-  const summarizedData = {};
-  tokenBalances.forEach(t => {
-    const price = t.symbol === "SOL" ? priceMap["SOL"] : priceMap[t.mint] || 0;
-    const value = t.balance * price;
-
-    const Asset = t.symbol;
-    const DataPurchased = "";
-    const Platform = "Phantom";
-    const AccountNumber = walletAddress;
-    const Type = stakedSOL.includes(Asset) ? "Staked" : "Spot";
-    const PositionType = "";
-    const Quantity = t.balance.toString();
-    const LastPrice = price;
-    const TotalValue = value.toString();
-    const PricePaid = "";
-    const TotalCost = "";
-    // const open_pnl = "";
-    const TotalGain = "";
-    const TotalGainPercent = "";
-    const Notes = "";
-
-    results.push([
-      Asset, DataPurchased, Platform, AccountNumber, Type, PositionType, Quantity, LastPrice, TotalValue, PricePaid, TotalCost, TotalGain, TotalGainPercent, Notes
-    ]);
-
-    let symbol1 = Asset;
-    if (Type == "Staked") {
-      symbol1 = "SOL";
-    }
-    summarizedData[symbol1] = summarizedData[symbol1] == null ? value : summarizedData[symbol1] + value;
-  });
-
-  return [results, summarizedData];
+  return [[], []];
 }
 
 function clearSheet() {
@@ -649,21 +680,15 @@ function main() {
 
   clearSheet();
   const [snapTradeFeed, snapTradeSummaryData] = getSnapTradeFeedData();
-  const [solanaData, solanaSummaryData] = getSolanaTokenBalances();
-  // const [trustWalletData, trustWalletSummaryData] = getMultichainBalances();
-  const [trustWalletData, trustWalletSummaryData] = getWalletBalancesOnChain();
+  const [trustWalletData, trustWalletSummaryData] = getMultiWalletBalancesOnChain(walletAddressesOnChain);
 
-  const feedData = [...snapTradeFeed, ...solanaData, ...trustWalletData];
+  const feedData = [...snapTradeFeed, ...trustWalletData];
   const summaryData = [];
 
   let sum = 0;
   Object.keys(snapTradeSummaryData).forEach(key => {
     summaryData.push([key, snapTradeSummaryData[key]]);
     sum += snapTradeSummaryData[key];
-  });
-  Object.keys(solanaSummaryData).forEach(key => {
-    summaryData.push([key, solanaSummaryData[key]]);
-    sum += solanaSummaryData[key];
   });
   Object.keys(trustWalletSummaryData).forEach(key => {
     summaryData.push([key, trustWalletSummaryData[key]]);
